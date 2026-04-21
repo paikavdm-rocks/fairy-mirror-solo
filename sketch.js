@@ -20,6 +20,7 @@ let handVelocity = 0;
 let currentObjectTransformed = null;
 let fullFairyImage = null;
 let isTransformingSelf = false;
+let myPlayerID = "solo"; // Placeholder to prevent reference errors
 
 function setup() {
   let cw = min(windowWidth - 40, 640);
@@ -190,10 +191,15 @@ function draw() {
   if (currentObjectTransformed) applyObjectTransformation();
   
   // Name Tag
-  if (myPlayerID !== null) {
+  if (currentStep > 1) { // Show name as soon as it's set
     let nx = width/2, ny = height/2;
-    if (poses.length > 0 && poses[0].nose) {
-      nx = width - poses[0].nose.x; ny = poses[0].nose.y;
+    if (poses.length > 0 && poses[0].keypoints) {
+      // ml5 v1 format: nose index is 0
+      let nose = poses[0].keypoints[0]; 
+      if (nose && nose.confidence > 0.1) {
+        nx = width - nose.x; 
+        ny = nose.y;
+      }
     }
     push();
     drawingContext.shadowBlur = 10;

@@ -1,5 +1,4 @@
 const replicateProxy = "https://itp-ima-replicate-proxy.web.app/api/create_n_get";
-// Note: We use an offscreen graphics buffer for better segmentation logic.
 
 let video;
 let canvas;
@@ -11,483 +10,258 @@ let hands = [];
 let bodyPose;
 let poses = [];
 
+let currentStep = 1; // 1: Name, 2: Wand, 3: Transformation
+let myPlayerName = "Fairy";
+let myFairyColor;
+let wingColor;
+
+let spellContainer;
+let nameContainer;
+
 let fairyFilterActive = false;
 let prevHandX = null;
 let handVelocity = 0;
-
-// Models will be loaded asynchronously in setup()
-
-// Real-time Fairy Assets (Generated placeholders)
-let fairyOverlay;
-let wingColor;
-
-// State of the current spell
-let currentObjectMask = null; // AI result for object
-let currentObjectTransformed = null; // AI result for object style
+let currentObjectTransformed = null;
 
 function setup() {
-  // Enlarge for dramatic flair
-  canvas = createCanvas(640, 480);
+  let cw = min(windowWidth - 40, 640);
+  let ch = cw * 0.75;
+  canvas = createCanvas(cw, ch);
   canvas.parent('p5-container');
-  
-  // Custom layout for UI underneath canvas
+
   let controls = createDiv();
+  controls.parent('controls-container');
   controls.style('display', 'flex');
   controls.style('flex-direction', 'column');
   controls.style('align-items', 'center');
   controls.style('gap', '15px');
-  controls.style('margin-top', '5px');
-  
+
   let inputRow = createDiv();
   inputRow.style('display', 'flex');
+  inputRow.style('flex-wrap', 'wrap');
+  inputRow.style('justify-content', 'center');
   inputRow.style('gap', '10px');
   inputRow.parent(controls);
-  
-  let input_image_field = createInput("A crystal water flower");
-  input_image_field.size(300);
-  input_image_field.id("input_image_prompt");
-  input_image_field.style('padding', '12px 20px');
-  input_image_field.style('border-radius', '30px');
-  input_image_field.style('border', '2px solid #ff00ff');
-  input_image_field.style('background', 'rgba(20,0,40,0.8)');
-  input_image_field.style('color', 'white');
-  input_image_field.style('font-family', 'Quicksand');
-  input_image_field.style('font-size', '1rem');
-  input_image_field.style('outline', 'none');
-  input_image_field.parent(inputRow);
-  
-  let castButton = createButton("✨ CAST SPELL ✨");
-  castButton.style('padding', '12px 24px');
-  castButton.style('border-radius', '30px');
-  castButton.style('border', 'none');
-  castButton.style('background', 'linear-gradient(90deg, #ff00ff, #00ffff)');
-  castButton.style('color', 'black');
-  castButton.style('font-family', 'Quicksand');
-  castButton.style('font-weight', 'bold');
-  castButton.style('cursor', 'pointer');
-  castButton.style('font-size', '1rem');
-  castButton.style('box-shadow', '0 0 15px rgba(255, 0, 255, 0.5)');
-  castButton.mousePressed(() => {
-    castRegionalSpell(input_image_field.value());
-  });
-  castButton.parent(inputRow);
 
-  feedback = createP("Look into the Mirror! Conjure your item first.");
+  // --- PHASE 1: NAMING ---
+  nameContainer = createDiv();
+  nameContainer.style('display', 'flex');
+  nameContainer.style('align-items', 'center');
+  nameContainer.style('gap', '10px');
+  nameContainer.parent(inputRow);
+
+  let nameInput = createInput("Your Fairy Name");
+  nameInput.style('padding', '10px 15px');
+  nameInput.style('border-radius', '25px');
+  nameInput.style('border', '2px solid #00ffff');
+  nameInput.style('background', 'rgba(20,0,40,0.8)');
+  nameInput.style('color', 'white');
+  nameInput.parent(nameContainer);
+
+  let nameBtn = createButton("✨ SET NAME ✨");
+  nameBtn.style('padding', '10px 20px');
+  nameBtn.style('border-radius', '30px');
+  nameBtn.style('background', 'linear-gradient(90deg, #00ffff, #ff00ff)');
+  nameBtn.style('cursor', 'pointer');
+  nameBtn.parent(nameContainer);
+  nameBtn.mousePressed(() => {
+    if (currentStep === 1) {
+      myPlayerName = nameInput.value();
+      myFairyColor = hashStringToColor(myPlayerName);
+      wingColor = myFairyColor;
+      nextStep(2);
+      nameContainer.style('display', 'none');
+      spellContainer.style('display', 'flex');
+    }
+  });
+
+  // --- PHASE 2: WAND ---
+  spellContainer = createDiv();
+  spellContainer.style('display', 'none');
+  spellContainer.style('gap', '10px');
+  spellContainer.parent(inputRow);
+
+  let itemInput = createInput("A crystal flower");
+  itemInput.style('padding', '10px 15px');
+  itemInput.style('border-radius', '25px');
+  itemInput.parent(spellContainer);
+
+  let castBtn = createButton("✨ CREATE WAND ✨");
+  castBtn.style('padding', '10px 20px');
+  castBtn.style('border-radius', '30px');
+  castBtn.style('background', 'linear-gradient(90deg, #ff00ff, #00ffff)');
+  castBtn.parent(spellContainer);
+  castBtn.mousePressed(() => {
+    castRegionalSpell(itemInput.value());
+  });
+
+  feedback = createP("Enter your name to begin...");
   feedback.style('color', '#ffbaff');
   feedback.style('font-family', 'Quicksand');
-  feedback.style('font-size', '1.2rem');
-  feedback.style('margin', '0');
   feedback.parent(controls);
 
-  video = createCapture(VIDEO);
-  video.size(640, 480);
-  video.hide();
-  
-  // Load models asynchronously so the page doesn't get stuck on "Loading..."
-  handPose = ml5.handPose(() => {
-    handPose.detectStart(video, (results) => {
-      hands = results;
-    });
-  });
-  
-  bodyPose = ml5.bodyPose(() => {
-    bodyPose.detectStart(video, (results) => {
-      poses = results;
-    });
+  // Video Setup (Stability fix: Physical attachment)
+  video = createCapture(VIDEO, () => {
+    video.size(width, height);
+    if (typeof ml5 !== 'undefined') {
+      handPose = ml5.handPose({ maxHands: 1 }, () => {
+        handPose.detectStart(video.elt, (results) => { hands = results; });
+      });
+      bodyPose = ml5.bodyPose(() => {
+        bodyPose.detectStart(video.elt, (results) => { poses = results; });
+      });
+    }
   });
 
-  // Create real-time fairy effect colors
-  wingColor = color(200, 100, 255, 120); // Pink/Purple glow
+  video.parent('controls-container');
+  video.elt.setAttribute('playsinline', '');
+  video.elt.style.position = 'absolute';
+  video.elt.style.top = '-9999px';
+  video.elt.play().catch(e => console.log("Mirror failed:", e));
+
+  myFairyColor = color(200, 100, 255, 120);
+  wingColor = myFairyColor;
+}
+
+function hashStringToColor(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash);
+  let h = abs(hash % 360);
+  push(); colorMode(HSL); let c = color(h, 80, 70, 0.5); pop();
+  return c;
+}
+
+function nextStep(step) {
+  if (step <= currentStep) return;
+  let prev = document.getElementById('instr-' + currentStep);
+  if (prev) prev.style.display = 'none';
+  currentStep = step;
+  let next = document.getElementById('instr-' + currentStep);
+  if (next) {
+    next.style.display = 'block';
+    next.classList.add('fly-in');
+  }
 }
 
 function draw() {
   background(0);
+  if (!video || !video.elt || video.elt.readyState < 2) {
+    fill(255); textAlign(CENTER); text("✨ AWAKENING THE MIRROR ✨", width/2, height/2);
+    return;
+  }
 
-  // 1. We always show the live feed, but with a fairy transformation
   push();
-  translate(width, 0); // Flipped view
-  scale(-1, 1);
-  
-  // Hand Shake velocity logic
+  translate(width, 0); scale(-1, 1);
+
   if (hands.length > 0) {
-    // Only check shake if object has already been transformed
-    let wrist = hands[0].wrist || hands[0].keypoints[0];
+    let wrist = hands[0].keypoints[0];
     if (prevHandX !== null && currentObjectTransformed) {
       let speed = abs(wrist.x - prevHandX);
-      handVelocity = lerp(handVelocity, speed, 0.4); // Reacts faster
-      if (handVelocity > 8) { // Much easier shake threshold
-        fairyFilterActive = true;
-      }
+      handVelocity = lerp(handVelocity, speed, 0.4);
+      if (handVelocity > 10) fairyFilterActive = true;
     }
     prevHandX = wrist.x;
   }
 
-  // REAL-TIME FAIRY TRANSFORMATION (on the live video)
-  if (currentObjectTransformed && fairyFilterActive) {
-    tint(255, 180, 255); // Shift all live color slightly purple/fairy-like
-  }
   image(video, 0, 0, width, height);
-  noTint();
-  
-  // Basic real-time glowing particles around your "fairy form"
+
   if (currentObjectTransformed && fairyFilterActive) {
+    fill(255, 180, 255, 40); rect(0, 0, width, height);
     applyFairyGlow();
   }
-  
-  pop(); // End flipped view
+  pop();
 
-  // 2. We use AI to apply the object transformation (if the spell worked)
-  if (currentObjectTransformed) {
-    // If the AI identified the object segment, we can isolate it
-    // Using simple masking here to demonstrate segmentation.
-    // In a full implementation, the AI provides the mask itself.
-    applyObjectTransformation();
+  if (currentObjectTransformed) applyObjectTransformation();
+  
+  // Name Tag
+  if (myPlayerName !== "Fairy") {
+    let nx = width/2, ny = height/2;
+    if (poses.length > 0 && poses[0].nose) {
+      nx = width - poses[0].nose.x; ny = poses[0].nose.y;
+    }
+    push();
+    drawingContext.shadowBlur = 8;
+    drawingContext.shadowColor = myFairyColor;
+    fill(255); textAlign(CENTER); textSize(32); textFont('Caveat');
+    text(myPlayerName, nx, ny - 140);
+    fill(myFairyColor); ellipse(nx, ny - 110, 10, 10);
+    pop();
   }
 
-  // Magic Frame
-  noFill();
-  strokeWeight(20);
-  stroke(wingColor);
-  rect(0, 0, width, height);
-
-  // Particle System
+  // Particles
   for (let i = particles.length - 1; i >= 0; i--) {
-    particles[i].update();
-    particles[i].show();
+    particles[i].update(); particles[i].show();
     if (particles[i].finished()) particles.splice(i, 1);
   }
+  if (particles.length > 300) particles.splice(0, particles.length - 300);
 
-  // Draw Wand
   drawWand();
-  
-  // Casting Overlay
+
   if (isCasting) {
-    fill(255, 255, 255, 200);
-    rect(0, 0, width, height);
+    push(); translate(width/2, height/2); rotate(frameCount*0.1); noFill(); stroke(myFairyColor); strokeWeight(10); arc(0,0,100,100,0,PI); pop();
   }
 }
 
-// REAL-TIME VISUALS: This simulates turning you into a fairy in p5.
-function applyFairyGlow() {
-  fill(wingColor);
-  noStroke();
+async function castRegionalSpell(prompt) {
+  isCasting = true; feedback.html("Crafting " + prompt + "...");
+  let offscreen = createGraphics(width, height);
+  offscreen.translate(width, 0); offscreen.scale(-1, 1);
+  offscreen.image(video, 0, 0, width, height);
   
-  if (poses.length > 0) {
-    let pose = poses[0];
-    
-    // We are INSIDE the push/pop flipped canvas, so x already maps to width-x on screen!
-    let getFx = (kp) => kp.x; 
-    
-    // Draw Wings on Shoulders
-    let lShoulder = pose.left_shoulder;
-    let rShoulder = pose.right_shoulder;
-    
-    if (lShoulder && lShoulder.confidence > 0.1) {
-      drawWing(getFx(lShoulder), lShoulder.y, 1); // 1 = Left Shoulder (Flaring rightwards visually)
+  let postData = {
+    model: "google/nano-banana",
+    input: { prompt: prompt + ". glowing magical item, fairy style, black background, isolated." }
+  };
+
+  try {
+    const response = await fetch(replicateProxy, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(postData) });
+    const result = await response.json();
+    if (result.output) {
+      loadImage(result.output, (img) => {
+        currentObjectTransformed = img;
+        isCasting = false; feedback.html("Success! Now SHAKE your hand!");
+        spellContainer.style('display', 'none');
+        nextStep(3);
+      });
     }
-    
-    if (rShoulder && rShoulder.confidence > 0.1) {
-      drawWing(getFx(rShoulder), rShoulder.y, -1); // -1 = Right Shoulder (Flaring leftwards visually)
-    }
-    
-    // Draw Fairy Crown and Ears on the Head
-    let leftEar = pose.left_ear;
-    let rightEar = pose.right_ear;
-    let nose = pose.nose;
-    
-    if (nose && nose.confidence > 0.1) {
-      let nx = getFx(nose);
-      let ny = nose.y;
-      
-      // Draw pointy ears
-      if (leftEar && leftEar.confidence > 0.1) {
-        drawElfEar(getFx(leftEar), leftEar.y, 1);
-      }
-      if (rightEar && rightEar.confidence > 0.1) {
-        drawElfEar(getFx(rightEar), rightEar.y, -1);
-      }
-      
-      // Draw intricate crown
-      drawCrown(nx, ny - 90);
-    }
-    
-    // Particles flowing down from wings
-    if (frameCount % 3 === 0 && lShoulder && rShoulder) {
-      particles.push(new Particle(getFx(lShoulder) + random(-20, 20), lShoulder.y));
-      particles.push(new Particle(getFx(rShoulder) + random(-20, 20), rShoulder.y));
-    }
-  } else {
-    // Fallback if no person found
-    drawWing(width * 0.4, height * 0.4, 1);
-    drawWing(width * 0.6, height * 0.4, -1);
-    for(let i=0; i<3; i++) {
-      particles.push(new Particle(random(width * 0.2, width * 0.8), random(height * 0.2, height * 0.6)));
-    }
-  }
+  } catch (e) { isCasting = false; feedback.html("Try again!"); }
+  offscreen.remove();
 }
 
-function drawWing(x, y, dir) {
-  push();
-  translate(x, y);
-  
-  let flutter = sin(frameCount * 0.2) * 0.1;
-  rotate(dir * PI/8 + flutter); 
-  
-  // Glowing effect
-  blendMode(ADD);
-  noStroke();
-  
-  // Insect wings (4 layers)
-  fill(150, 50, 255, 100);
-  ellipse(dir * 50, -80, 100, 200); 
-  
-  fill(50, 200, 255, 120);
-  ellipse(dir * 40, -60, 60, 150); 
-  
-  fill(255, 150, 100, 150);
-  ellipse(dir * 30, -50, 30, 100); 
-  
-  fill(200, 50, 150, 100);
-  ellipse(dir * 35, 50, 70, 120); 
-  
-  fill(100, 100, 255, 150);
-  ellipse(dir * 25, 40, 40, 80); 
-  
-  blendMode(BLEND); 
-  strokeWeight(2);
-  noFill();
-  
-  // Intricate pulsing veins
-  let pulse = map(sin(frameCount * 0.1), -1, 1, 100, 255);
-  stroke(255, 255, 255, pulse);
-  bezier(0, 0, dir * 25, -40, dir * 60, -90, dir * 50, -180);
-  bezier(0, 0, dir * 15, -20, dir * 40, -60, dir * 70, -70);
-  bezier(0, 0, dir * 10, -10, dir * 30, -30, dir * 50, -20);
-  
-  bezier(0, 0, dir * 15, 20, dir * 40, 60, dir * 30, 110);
-  bezier(0, 0, dir * 10, 10, dir * 30, 40, dir * 60, 50);
-  
-  pop();
-}
-
-function drawCrown(x, y) {
-  push();
-  translate(x, y);
-  
-  // Floating magic halo rings
-  noFill();
-  strokeWeight(2);
-  stroke(255, 215, 0, 150);
-  push();
-  rotate(frameCount * 0.02);
-  ellipse(0, 5, 80, 20); 
-  pop();
-  
-  push();
-  rotate(-frameCount * 0.015);
-  stroke(255, 150, 255, 150);
-  ellipse(0, -10, 100, 30);
-  pop();
-  
-  // Tiara lattice
-  blendMode(ADD);
-  noStroke();
-  fill(255, 100, 255, 255); 
-  ellipse(0, 0, 25, 30);
-  fill(255, 255, 255, 255); 
-  ellipse(0, 0, 10, 15);
-  
-  blendMode(BLEND);
-  fill(255, 215, 0, 220);
-  triangle(-12, 0, 12, 0, 0, -50);
-  
-  // Side gems
-  for (let d = -1; d <= 1; d += 2) {
-    for (let j = 1; j <= 3; j++) {
-      let offset = j * 25;
-      let heightOff = j * 10; 
-      let gemSize = 20 - j * 4;
-      
-      stroke(255, 215, 0, 200);
-      strokeWeight(3);
-      noFill();
-      bezier(d * (offset - 25), heightOff - 10, d * (offset - 15), heightOff, d * offset, heightOff, d * offset, heightOff);
-      
-      noStroke();
-      blendMode(ADD);
-      if (j === 2) fill(50, 200, 255, 255); 
-      else fill(255, 255, 100, 255); 
-      
-      ellipse(d * offset, heightOff, gemSize, gemSize + 5);
-      
-      blendMode(BLEND);
-      fill(255, 215, 0, 220);
-      triangle(d * offset - gemSize/2, heightOff, d * offset + gemSize/2, heightOff, d * offset, heightOff - (40 - j * 8));
-    }
-  }
-  pop();
-}
-
-function drawElfEar(x, y, dir) {
-  push();
-  translate(x, y);
-  
-  noStroke();
-  fill(255, 220, 220, 255); 
-  
-  beginShape();
-  vertex(dir * -10, 20); 
-  vertex(dir * -15, -10); 
-  vertex(dir * 50, -50); // longer tip!
-  vertex(dir * 15, -5); 
-  vertex(dir * 5, 25);
-  endShape(CLOSE);
-  
-  fill(255, 120, 120, 200);
-  beginShape();
-  vertex(dir * -5, 10);
-  vertex(dir * -5, -5);
-  vertex(dir * 40, -40);
-  vertex(dir * 5, 0);
-  endShape(CLOSE);
-  
-  // Magical dangling earring!
-  stroke(255, 215, 0, 255);
-  strokeWeight(2);
-  line(dir * 0, 20, dir * 0, 40); 
-  noStroke();
-  blendMode(ADD);
-  fill(100, 255, 255, 255);
-  ellipse(dir * 0, 45, 10, 20); 
-  fill(255, 255, 255, 255);
-  ellipse(dir * 0, 45, 4, 8); 
-  
-  blendMode(BLEND);
-  pop();
-}
-
-// AI COMPOSITION: Apply the AI transformation only to the region of the object.
 function applyObjectTransformation() {
-  push();
-  blendMode(SCREEN); // Makes the black background transparent!
-  let objW = width * 0.3;
-  let objH = height * 0.3;
-  
-  let targetX = width / 2;
-  let targetY = height / 2;
-  
-  if (hands.length > 0) {
-    let hand = hands[0];
-    let wrist = hand.wrist || hand.keypoints[0]; // fallback
-    
-    // Map coordinates to account for the flipped video!
-    targetX = width - wrist.x;
-    targetY = wrist.y;
-  }
-  
-  image(currentObjectTransformed, targetX - objW/2, targetY - objH/2, objW, objH);
-  
-  // Add glitter around the specific transformed object
-  strokeWeight(2);
-  stroke(255, 255, 0, 150);
-  noFill();
-  rect(targetX - objW/2, targetY - objH/2, objW, objH);
+  push(); blendMode(SCREEN); 
+  let pos = {x: width/2, y: height/2};
+  if (hands.length > 0) { pos.x = width - hands[0].keypoints[0].x; pos.y = hands[0].keypoints[0].y; }
+  image(currentObjectTransformed, pos.x - 100, pos.y - 100, 200, 200);
   pop();
 }
 
 function drawWand() {
-  fill(255, 255, 200);
-  noStroke();
-  
   if (hands.length > 0) {
-    let hand = hands[0];
-    let indexFinger = hand.index_finger_tip || hand.keypoints[8];
-    
-    // Flipped coordinates
-    let x = width - indexFinger.x;
-    let y = indexFinger.y;
-    
-    ellipse(x, y, 15, 15);
-    
-    if (frameCount % 2 === 0) {
-      particles.push(new Particle(x, y));
-    }
-  } else {
-    ellipse(mouseX, mouseY, 10, 10);
+    let tip = hands[0].keypoints[8];
+    let x = width - tip.x, y = tip.y;
+    fill(255, 255, 200); ellipse(x, y, 12, 12);
+    if (frameCount % 2 === 0) particles.push(new Particle(x, y));
   }
 }
 
-// This is the updated, complex AI function. It uses a model that supports
-// segmentation or 'masking'.
-async function castRegionalSpell(objectPrompt) {
-  isCasting = true;
-  feedback.html("Isolating the object... turning you into a Fairy...");
-
-  // Capture flipped live feed for the AI
-  let offscreen = createGraphics(width, height);
-  offscreen.translate(width, 0);
-  offscreen.scale(-1, 1);
-  offscreen.image(video, 0, 0, width, height);
-  let imgBase64 = offscreen.elt.toDataURL();
-
-  // Updated Prompting for REGIONAL transformation. 
-  // We use Stable Diffusion XL in-painting/segmentation.
-  let fairyAesthetic = "ethereal lighting, cinematic, glittery fairy kingdom style";
-  // We only want the wand/object to be generated, NOT the user.
-  let targetModel = "google/nano-banana"; 
-
-  // Prompt that ONLY asks for the standalone object
-  let objectAesthetic = "A standalone, glowing magical item. " + fairyAesthetic + ", highly detailed 3D render, black background, isolated object.";
-  let segmentedPrompt = objectPrompt + ". " + objectAesthetic;
-
-  let postData = {
-    model: targetModel,
-    input: {
-      prompt: segmentedPrompt,
-      // We remove image_input so the AI doesn't try to redraw the whole human video feed
-    },
-  };
-
-  try {
-    const response = await fetch(replicateProxy, {
-      headers: { "Content-Type": `application/json` },
-      method: "POST",
-      body: JSON.stringify(postData),
-    });
-    const result = await response.json();
-
-    if (result.output) {
-      loadImage(result.output, (incomingImage) => {
-        currentObjectTransformed = incomingImage; // The whole transformed image
-        isCasting = false;
-        feedback.html("Spell successful! Look at your new magical item!");
-        for(let i=0; i<60; i++) particles.push(new Particle(random(width), random(height)));
-      });
+function applyFairyGlow() {
+  if (poses.length > 0) {
+    let p = poses[0];
+    if (p.left_shoulder && p.right_shoulder) {
+      fill(wingColor); noStroke();
+      ellipse(width - p.left_shoulder.x - 50, p.left_shoulder.y, 100, 200);
+      ellipse(width - p.right_shoulder.x + 50, p.right_shoulder.y, 100, 200);
     }
-  } catch (error) {
-    isCasting = false;
-    feedback.html("The transformation spell failed! Make sure you are holding the object clearly!");
   }
 }
 
 class Particle {
   constructor(x, y) {
-    this.x = x;
-    this.y = y;
-    this.vx = random(-2, 2);
-    this.vy = random(-2, 2);
-    this.alpha = 255;
-    this.color = color(random(180, 255), random(100, 255), 255);
+    this.x = x; this.y = y; this.vx = random(-1, 1); this.vy = random(-1, 1);
+    this.alpha = 255; this.color = wingColor || color(255);
   }
   finished() { return this.alpha < 0; }
-  update() {
-    this.x += this.vx;
-    this.y += this.vy;
-    this.alpha -= 8;
-  }
-  show() {
-    noStroke();
-    fill(red(this.color), green(this.color), blue(this.color), this.alpha);
-    ellipse(this.x, this.y, random(2, 5));
-  }
+  update() { this.x += this.vx; this.y += this.vy; this.alpha -= 5; }
+  show() { noStroke(); fill(red(this.color), green(this.color), blue(this.color), this.alpha); ellipse(this.x, this.y, 3); }
 }

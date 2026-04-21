@@ -5,23 +5,21 @@ let canvas;
 let feedback;
 let particles = [];
 let isCasting = false;
-let handPose;
-let hands = [];
-let bodyPose;
-let poses = [];
+let handPose, bodyPose;
+let hands = [], poses = [];
 
-let currentStep = 1; // 1: Name, 2: Wand, 3: Transformation
+let currentStep = 1; 
 let myPlayerName = "Fairy";
 let myFairyColor;
 let wingColor;
 
-let spellContainer;
-let nameContainer;
-
+let spellContainer, nameContainer;
 let fairyFilterActive = false;
 let prevHandX = null;
 let handVelocity = 0;
 let currentObjectTransformed = null;
+let fullFairyImage = null;
+let isTransformingSelf = false;
 
 function setup() {
   let cw = min(windowWidth - 40, 640);
@@ -34,7 +32,7 @@ function setup() {
   controls.style('display', 'flex');
   controls.style('flex-direction', 'column');
   controls.style('align-items', 'center');
-  controls.style('gap', '15px');
+  controls.style('gap', '20px');
 
   let inputRow = createDiv();
   inputRow.style('display', 'flex');
@@ -59,9 +57,10 @@ function setup() {
   nameInput.parent(nameContainer);
 
   let nameBtn = createButton("✨ SET NAME ✨");
-  nameBtn.style('padding', '10px 20px');
+  nameBtn.style('padding', '12px 24px');
   nameBtn.style('border-radius', '30px');
   nameBtn.style('background', 'linear-gradient(90deg, #00ffff, #ff00ff)');
+  nameBtn.style('font-weight', 'bold');
   nameBtn.style('cursor', 'pointer');
   nameBtn.parent(nameContainer);
   nameBtn.mousePressed(() => {
@@ -81,26 +80,26 @@ function setup() {
   spellContainer.style('gap', '10px');
   spellContainer.parent(inputRow);
 
-  let itemInput = createInput("A crystal flower");
+  let itemInput = createInput("A crystal flower wand");
   itemInput.style('padding', '10px 15px');
   itemInput.style('border-radius', '25px');
   itemInput.parent(spellContainer);
 
   let castBtn = createButton("✨ CREATE WAND ✨");
-  castBtn.style('padding', '10px 20px');
+  castBtn.style('padding', '12px 24px');
   castBtn.style('border-radius', '30px');
   castBtn.style('background', 'linear-gradient(90deg, #ff00ff, #00ffff)');
+  castBtn.style('font-weight', 'bold');
   castBtn.parent(spellContainer);
   castBtn.mousePressed(() => {
     castRegionalSpell(itemInput.value());
   });
 
-  feedback = createP("Enter your name to begin...");
+  feedback = createP("Look into the Mirror! The spirits are waiting.");
   feedback.style('color', '#ffbaff');
   feedback.style('font-family', 'Quicksand');
   feedback.parent(controls);
 
-  // Video Setup (Stability fix: Physical attachment)
   video = createCapture(VIDEO, () => {
     video.size(width, height);
     if (typeof ml5 !== 'undefined') {
@@ -119,7 +118,7 @@ function setup() {
   video.elt.style.top = '-9999px';
   video.elt.play().catch(e => console.log("Mirror failed:", e));
 
-  myFairyColor = color(200, 100, 255, 120);
+  myFairyColor = color(255, 0, 255);
   wingColor = myFairyColor;
 }
 
@@ -127,7 +126,7 @@ function hashStringToColor(str) {
   let hash = 0;
   for (let i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash);
   let h = abs(hash % 360);
-  push(); colorMode(HSL); let c = color(h, 80, 70, 0.5); pop();
+  push(); colorMode(HSL); let c = color(h, 80, 70, 0.8); pop();
   return c;
 }
 
@@ -137,16 +136,23 @@ function nextStep(step) {
   if (prev) prev.style.display = 'none';
   currentStep = step;
   let next = document.getElementById('instr-' + currentStep);
-  if (next) {
-    next.style.display = 'block';
-    next.classList.add('fly-in');
-  }
+  if (next) { next.style.display = 'block'; next.classList.add('fly-in'); }
 }
 
 function draw() {
   background(0);
   if (!video || !video.elt || video.elt.readyState < 2) {
-    fill(255); textAlign(CENTER); text("✨ AWAKENING THE MIRROR ✨", width/2, height/2);
+    fill(255); textAlign(CENTER); textSize(24); text("✨ AWAKENING THE MIRROR ✨", width/2, height/2);
+    return;
+  }
+
+  if (fullFairyImage) {
+    image(fullFairyImage, 0, 0, width, height);
+    for (let i = particles.length - 1; i >= 0; i--) {
+        particles[i].update(); particles[i].show();
+        if (particles[i].finished()) particles.splice(i, 1);
+    }
+    if (frameCount % 10 === 0) particles.push(new Particle(random(width), random(height)));
     return;
   }
 
@@ -154,11 +160,17 @@ function draw() {
   translate(width, 0); scale(-1, 1);
 
   if (hands.length > 0) {
-    let wrist = hands[0].keypoints[0];
-    if (prevHandX !== null && currentObjectTransformed) {
+    let hand = hands[0];
+    let wrist = hand.keypoints[0];
+    if (prevHandX !== null && currentObjectTransformed && !isTransformingSelf) {
       let speed = abs(wrist.x - prevHandX);
       handVelocity = lerp(handVelocity, speed, 0.4);
       if (handVelocity > 10) fairyFilterActive = true;
+      
+      // TRIGGER FULL TRANSFORMATION WITH FIST
+      if (isFist(hand) && fairyFilterActive) {
+          castFullSelfSpell();
+      }
     }
     prevHandX = wrist.x;
   }
@@ -166,7 +178,11 @@ function draw() {
   image(video, 0, 0, width, height);
 
   if (currentObjectTransformed && fairyFilterActive) {
-    fill(255, 180, 255, 40); rect(0, 0, width, height);
+    // Advanced Filter Overlay
+    blendMode(SCREEN);
+    fill(red(myFairyColor), green(myFairyColor), blue(myFairyColor), 40);
+    rect(0, 0, width, height);
+    blendMode(BLEND);
     applyFairyGlow();
   }
   pop();
@@ -174,43 +190,63 @@ function draw() {
   if (currentObjectTransformed) applyObjectTransformation();
   
   // Name Tag
-  if (myPlayerName !== "Fairy") {
+  if (myPlayerID !== null) {
     let nx = width/2, ny = height/2;
     if (poses.length > 0 && poses[0].nose) {
       nx = width - poses[0].nose.x; ny = poses[0].nose.y;
     }
     push();
-    drawingContext.shadowBlur = 8;
+    drawingContext.shadowBlur = 10;
     drawingContext.shadowColor = myFairyColor;
-    fill(255); textAlign(CENTER); textSize(32); textFont('Caveat');
+    fill(255); textAlign(CENTER); textSize(36); textFont('Caveat');
     text(myPlayerName, nx, ny - 140);
     fill(myFairyColor); ellipse(nx, ny - 110, 10, 10);
     pop();
   }
 
-  // Particles
+  // Particle System
   for (let i = particles.length - 1; i >= 0; i--) {
     particles[i].update(); particles[i].show();
     if (particles[i].finished()) particles.splice(i, 1);
   }
-  if (particles.length > 300) particles.splice(0, particles.length - 300);
 
   drawWand();
 
-  if (isCasting) {
-    push(); translate(width/2, height/2); rotate(frameCount*0.1); noFill(); stroke(myFairyColor); strokeWeight(10); arc(0,0,100,100,0,PI); pop();
+  // Casting Overlays
+  if (isCasting || isTransformingSelf) {
+    push();
+    fill(255, 255, 255, 100);
+    rect(0, 0, width, height);
+    translate(width/2, height/2); rotate(frameCount*0.1);
+    noFill(); stroke(myFairyColor || color(255, 0, 255)); strokeWeight(12);
+    arc(0,0,120,120,0,PI);
+    pop();
+    
+    fill(255); textAlign(CENTER); textSize(28); textFont('Cinzel Decorative');
+    text("MAGICAL REALITY CRAFTING...", width/2, height/2 + 100);
   }
 }
 
+function solveFist(hand) {
+  let wrist = hand.keypoints[0];
+  let folded = 0;
+  let fingers = [{t:8,k:6},{t:12,k:10},{t:16,k:14},{t:20,k:18}];
+  for(let f of fingers) {
+    if (dist(wrist.x, wrist.y, hand.keypoints[f.t].x, hand.keypoints[f.t].y) < dist(wrist.x, wrist.y, hand.keypoints[f.k].x, hand.keypoints[f.k].y) * 1.5) folded++;
+  }
+  return folded >= 3;
+}
+function isFist(hand) { return solveFist(hand); }
+
 async function castRegionalSpell(prompt) {
-  isCasting = true; feedback.html("Crafting " + prompt + "...");
+  isCasting = true; feedback.html("Forging your wand...");
   let offscreen = createGraphics(width, height);
   offscreen.translate(width, 0); offscreen.scale(-1, 1);
   offscreen.image(video, 0, 0, width, height);
   
   let postData = {
     model: "google/nano-banana",
-    input: { prompt: prompt + ". glowing magical item, fairy style, black background, isolated." }
+    input: { prompt: prompt + ". highly detailed 3D magical artifact, ethereal glow, black background, center composition." }
   };
 
   try {
@@ -219,20 +255,53 @@ async function castRegionalSpell(prompt) {
     if (result.output) {
       loadImage(result.output, (img) => {
         currentObjectTransformed = img;
-        isCasting = false; feedback.html("Success! Now SHAKE your hand!");
+        isCasting = false; feedback.html("Success! Now SHAKE your wand and then CLENCH YOUR FIST!");
         spellContainer.style('display', 'none');
         nextStep(3);
       });
     }
-  } catch (e) { isCasting = false; feedback.html("Try again!"); }
-  offscreen.remove();
+  } catch (e) { isCasting = false; feedback.html("Magic failed! Try a new incantation."); }
+}
+
+async function castFullSelfSpell() {
+  if (isTransformingSelf) return;
+  isTransformingSelf = true;
+  feedback.html("THE FINAL REVELATION IS COMMENCING...");
+
+  let offscreen = createGraphics(width, height);
+  offscreen.translate(width, 0); offscreen.scale(-1, 1);
+  offscreen.image(video, 0, 0, width, height);
+  let imgBase = offscreen.elt.toDataURL();
+
+  let postData = {
+    model: "google/nano-banana",
+    input: {
+      image: imgBase,
+      prompt: "A breathtaking high-fantasy portrait of a High Fairy in an enchanted forest. Wings of light, glowing crown, mystical aura, masterpieces, cinematic lighting, ethereal colors."
+    }
+  };
+
+  try {
+    const response = await fetch(replicateProxy, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(postData) });
+    const result = await response.json();
+    if (result.output) {
+      loadImage(result.output, (img) => {
+        fullFairyImage = img;
+        isTransformingSelf = false;
+        feedback.html("YOU HAVE ASCENDED, HIGH FAIRY " + myPlayerName.toUpperCase() + "!");
+      });
+    }
+  } catch (e) { isTransformingSelf = false; feedback.html("The portal closed! Try again!"); }
 }
 
 function applyObjectTransformation() {
   push(); blendMode(SCREEN); 
   let pos = {x: width/2, y: height/2};
-  if (hands.length > 0) { pos.x = width - hands[0].keypoints[0].x; pos.y = hands[0].keypoints[0].y; }
-  image(currentObjectTransformed, pos.x - 100, pos.y - 100, 200, 200);
+  if (hands.length > 0) {
+    let wrist = hands[0].keypoints[0];
+    pos.x = width - wrist.x; pos.y = wrist.y;
+  }
+  image(currentObjectTransformed, pos.x - 120, pos.y - 120, 240, 240);
   pop();
 }
 
@@ -240,7 +309,7 @@ function drawWand() {
   if (hands.length > 0) {
     let tip = hands[0].keypoints[8];
     let x = width - tip.x, y = tip.y;
-    fill(255, 255, 200); ellipse(x, y, 12, 12);
+    fill(255, 255, 200, 200); ellipse(x, y, 15, 15);
     if (frameCount % 2 === 0) particles.push(new Particle(x, y));
   }
 }
@@ -249,19 +318,32 @@ function applyFairyGlow() {
   if (poses.length > 0) {
     let p = poses[0];
     if (p.left_shoulder && p.right_shoulder) {
-      fill(wingColor); noStroke();
-      ellipse(width - p.left_shoulder.x - 50, p.left_shoulder.y, 100, 200);
-      ellipse(width - p.right_shoulder.x + 50, p.right_shoulder.y, 100, 200);
+      push();
+      blendMode(ADD);
+      fill(red(wingColor), green(wingColor), blue(wingColor), 100);
+      noStroke();
+      drawWing(width - p.left_shoulder.x, p.left_shoulder.y, 1);
+      drawWing(width - p.right_shoulder.x, p.right_shoulder.y, -1);
+      pop();
     }
   }
 }
 
+function drawWing(x, y, dir) {
+  push();
+  translate(x, y);
+  rotate(dir * PI/6 + sin(frameCount*0.1)*0.2);
+  ellipse(dir * 60, -40, 120, 250);
+  ellipse(dir * 40, 40, 80, 150);
+  pop();
+}
+
 class Particle {
   constructor(x, y) {
-    this.x = x; this.y = y; this.vx = random(-1, 1); this.vy = random(-1, 1);
+    this.x = x; this.y = y; this.vx = random(-2, 2); this.vy = random(-2, 2);
     this.alpha = 255; this.color = wingColor || color(255);
   }
   finished() { return this.alpha < 0; }
   update() { this.x += this.vx; this.y += this.vy; this.alpha -= 5; }
-  show() { noStroke(); fill(red(this.color), green(this.color), blue(this.color), this.alpha); ellipse(this.x, this.y, 3); }
+  show() { noStroke(); fill(red(this.color), green(this.color), blue(this.color), this.alpha); ellipse(this.x, this.y, random(2, 6)); }
 }
